@@ -1,4 +1,4 @@
-module github.com/brave/zerotrace
+module github.com/NullHypothesis/zerotrace
 
 go 1.21
 
