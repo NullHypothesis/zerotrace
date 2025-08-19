@@ -3,7 +3,7 @@ module github.com/NullHypothesis/zerotrace
 go 1.24
 
 require (
-	github.com/go-chi/chi v1.5.4
+	github.com/go-chi/chi/v5 v5.2.2
 	github.com/google/gopacket v1.1.19
 	github.com/gorilla/websocket v1.5.0
 	golang.org/x/crypto v0.41.0

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/NullHypothesis/zerotrace"
-	"github.com/go-chi/chi"
+	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/acme/autocert"
 )
