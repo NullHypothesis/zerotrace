@@ -79,7 +79,11 @@ func getWssHandler(z *zerotrace.ZeroTrace) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defer c.Close()
+		defer func() {
+			if err := c.Close(); err != nil {
+				l.Printf("Error closing WebSocket conn: %v", err)
+			}
+		}()
 		l.Println("Successfully upgraded request to WebSocket.")
 
 		done := make(chan bool)
