@@ -1,7 +1,7 @@
 package main
 
 import (
-	"crypto/tls"
+	"context"
 	"flag"
 	"log"
 	"net/http"
@@ -9,10 +9,11 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/NullHypothesis/zerotrace"
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
-	"golang.org/x/crypto/acme/autocert"
+
+	"github.com/Amnesic-Systems/zero"
+	"github.com/Amnesic-Systems/zero/internal/config"
 )
 
 var (
@@ -65,7 +66,7 @@ func getIdxHandler(domain, addr string) http.HandlerFunc {
 	}
 }
 
-func getWssHandler(z *zerotrace.ZeroTrace) http.HandlerFunc {
+func getWssHandler(z *zero.Trace) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		l.Println("Handling new WebSocket request.")
 
@@ -116,8 +117,8 @@ func getWssHandler(z *zerotrace.ZeroTrace) http.HandlerFunc {
 
 func main() {
 	var addr, domain, ifaceName string
-	flag.StringVar(&ifaceName, "iface", "eth0", "Network interface name to listen on (default: eth0)")
-	flag.StringVar(&addr, "addr", ":8443", "Address to listen on (default: :8443)")
+	flag.StringVar(&ifaceName, "iface", "eth0", "Network interface name to listen on")
+	flag.StringVar(&addr, "addr", ":8080", "Address to listen on")
 	flag.StringVar(&domain, "domain", "", "The Web server's domain name.")
 	flag.Parse()
 
@@ -125,29 +126,34 @@ func main() {
 		l.Fatal("Specify domain name by using the -domain flag.")
 	}
 
-	z := zerotrace.NewZeroTrace(zerotrace.NewDefaultConfig())
-	if err := z.Start(); err != nil {
-		l.Fatalf("Error starting ZeroTrace: %v", err)
+	z := zero.NewTrace(config.WithInterface(ifaceName))
+	stopFn, err := z.Start(context.Background())
+	if err != nil {
+		l.Fatalf("Error starting trace: %v", err)
 	}
+	defer stopFn()
 
 	router := chi.NewRouter()
 	router.Get("/wss", getWssHandler(z))
 	router.Get("/", getIdxHandler(domain, addr))
 
-	certManager := autocert.Manager{
-		Prompt:     autocert.AcceptTOS,
-		Cache:      autocert.DirCache("certs"),
-		HostPolicy: autocert.HostWhitelist(domain),
-	}
-	go http.ListenAndServe(":http", certManager.HTTPHandler(nil)) //nolint:errcheck
-	server := &http.Server{
-		Addr:    addr,
-		Handler: router,
-		TLSConfig: &tls.Config{
-			GetCertificate: certManager.GetCertificate,
-		},
+	// certManager := autocert.Manager{
+	// 	Prompt:     autocert.AcceptTOS,
+	// 	Cache:      autocert.DirCache("certs"),
+	// 	HostPolicy: autocert.HostWhitelist(domain),
+	// }
+	// go http.ListenAndServe(":http", certManager.HTTPHandler(nil)) //nolint:errcheck
+	// server := &http.Server{
+	// 	Addr:    addr,
+	// 	Handler: router,
+	// 	// TLSConfig: &tls.Config{
+	// 	// 	GetCertificate: certManager.GetCertificate,
+	// 	// },
+	// }
+	if err := http.ListenAndServe(addr, router); err != nil {
+		l.Fatalf("Error starting HTTP server: %v", err)
 	}
 
-	l.Printf("Starting Web service to listen on %s.", addr)
-	l.Println(server.ListenAndServeTLS("", ""))
+	//l.Printf("Starting Web service to listen on %s.", addr)
+	//l.Println(server.ListenAndServeTLS("", ""))
 }
