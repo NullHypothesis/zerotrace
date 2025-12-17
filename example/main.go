@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
+	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/Amnesic-Systems/zero"
 	"github.com/Amnesic-Systems/zero/internal/config"
@@ -137,23 +138,22 @@ func main() {
 	router.Get("/wss", getWssHandler(z))
 	router.Get("/", getIdxHandler(domain, addr))
 
-	// certManager := autocert.Manager{
-	// 	Prompt:     autocert.AcceptTOS,
-	// 	Cache:      autocert.DirCache("certs"),
-	// 	HostPolicy: autocert.HostWhitelist(domain),
-	// }
-	// go http.ListenAndServe(":http", certManager.HTTPHandler(nil)) //nolint:errcheck
-	// server := &http.Server{
-	// 	Addr:    addr,
-	// 	Handler: router,
-	// 	// TLSConfig: &tls.Config{
-	// 	// 	GetCertificate: certManager.GetCertificate,
-	// 	// },
-	// }
-	if err := http.ListenAndServe(addr, router); err != nil {
+	certManager := autocert.Manager{
+		Prompt:     autocert.AcceptTOS,
+		Cache:      autocert.DirCache("certs"),
+		HostPolicy: autocert.HostWhitelist(domain),
+	}
+	go func() {
+		l.Printf("80: handler returned: %v",
+			http.ListenAndServe(":http", certManager.HTTPHandler(nil)))
+	}()
+	server := &http.Server{
+		Addr:      addr,
+		Handler:   router,
+		TLSConfig: certManager.TLSConfig(),
+	}
+	l.Printf("Starting HTTPS server on %s.", addr)
+	if err := server.ListenAndServeTLS("", ""); err != nil {
 		l.Fatalf("Error starting HTTP server: %v", err)
 	}
-
-	//l.Printf("Starting Web service to listen on %s.", addr)
-	//l.Println(server.ListenAndServeTLS("", ""))
 }

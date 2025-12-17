@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"net"
+	"slices"
 	"sync"
 	"time"
 
@@ -27,6 +29,21 @@ func (p *pair) IsAnswered() bool {
 
 func (p *pair) RTT() time.Duration {
 	return p.res.RecvAt.Sub(p.req.Sent)
+}
+
+func (p *pair) String() string {
+	if p.res == nil {
+		// We didn't get a response for this particular probe packet.
+		return fmt.Sprintf("* [*] IP ID=%d, TTL=%d\n",
+			p.req.IPID, p.req.TTL)
+	}
+	if p.req == nil {
+		// This should never happen.
+		panic("bug: request pair packet is nil")
+	}
+
+	return fmt.Sprintf("%s [%s] IP ID=%d, TTL=%d\n",
+		p.res.RecvFrom, p.res.RecvAt, p.res.IPID, p.req.TTL)
 }
 
 // Machine represents our traceroute state machine.  We keep track of the
@@ -110,14 +127,28 @@ func (s *Machine) String() string {
 	s.Lock()
 	defer s.Unlock()
 
-	numRcvd := 0
-	for _, p := range s.ipidToPkts {
-		if p.IsAnswered() {
-			numRcvd++
-		}
+	var str string
+
+	ttlToPair := make(map[uint8]*pair)
+	for _, pair := range s.ipidToPkts {
+		ttlToPair[pair.req.TTL] = pair
 	}
-	return fmt.Sprintf("%d pkts sent; %d pkts received so far.",
-		len(s.ipidToPkts), numRcvd)
+	fmt.Println("created new map")
+
+	sortedTtls := slices.Sorted(maps.Keys(ttlToPair))
+	fmt.Printf("sorted ttl keys: %v\n", sortedTtls)
+	for _, ttl := range sortedTtls {
+		pair, ok := ttlToPair[ttl]
+		if !ok {
+			panic("failed to find pair for ttl")
+		}
+		if pair == nil {
+			panic("pair is nil but must not be")
+		}
+		str += pair.String()
+	}
+	fmt.Println("done stringifying state")
+	return str
 }
 
 // CalcRTT determines the RTT between us and the client by looking for the

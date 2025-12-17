@@ -3,6 +3,7 @@ package zero
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -30,9 +31,16 @@ type receiver chan *probe.Response
 
 // Trace implements the 0trace traceroute technique:
 // https://seclists.org/fulldisclosure/2007/Jan/145
+
+type seqReq struct {
+	fiveTuple netx.FiveTuple
+	ch        chan netx.SequenceNumbers // chan to send back the sequence numbers
+}
+
 type Trace struct {
 	register, unregister chan receiver
 	rawConn              *ipv4.RawConn
+	seqReq               chan seqReq
 	ipids                *ipid.Pool
 	pcap                 *pcap.Handle
 	cfg                  *config.Config
@@ -74,10 +82,6 @@ func (t *Trace) Start(ctx context.Context) (func(), error) {
 	return func() { t.pcap.Close() }, nil
 }
 
-// Close closes the Trace object.
-// func (z *Trace) Close() { z.pcap.Close()
-// }
-
 // CalcRTT starts a new traceroute and returns the RTT to the target
 // or, if the target won't respond to us, the RTT of the hop that's closest.
 // The given net.Conn represents an already-established TCP connection to the
@@ -87,11 +91,22 @@ func (t *Trace) Start(ctx context.Context) (func(), error) {
 // - should take context as input
 // - should say if the target itself answered or the closest hop
 func (t *Trace) CalcRTT(conn net.Conn) (time.Duration, error) {
-	remoteIP, err := netx.ExtractRemoteIP(conn)
+	fiveTuple, err := netx.ExtractFiveTuple(conn)
 	if err != nil {
 		return 0, err
 	}
-	sm := state.NewMachine(remoteIP)
+	seqReq := seqReq{
+		fiveTuple: *fiveTuple,
+		ch:        make(chan netx.SequenceNumbers, 1),
+	}
+	t.seqReq <- seqReq
+	// Block until we get at least one other packet from the remote host,
+	// allowing us to extract the sequence numbers.
+	seqNums := <-seqReq.ch
+
+	// TODO: extract sequence numbers for the five-tuple of the connection.
+	// send req over channel, get back seq numbers
+	sm := state.NewMachine(fiveTuple.DstIP)
 
 	// Register for receiving a copy of newly-captured ICMP responses.
 	ch := make(chan *probe.Response, 1)
@@ -102,7 +117,7 @@ func (t *Trace) CalcRTT(conn net.Conn) (time.Duration, error) {
 	// Spawn goroutine that sends bursts of trace packets.
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	t.sendTracePkts(conn, sm, &wg)
+	t.sendTracePkts(sm, fiveTuple, &seqNums, &wg)
 
 	ticker := time.NewTicker(250 * time.Millisecond) // TODO: make configurable
 	for {
@@ -112,6 +127,7 @@ func (t *Trace) CalcRTT(conn net.Conn) (time.Duration, error) {
 		case <-ticker.C:
 			wg.Wait()
 			if sm.IsDone() {
+				fmt.Println(sm)
 				return sm.CalcRTT()
 			}
 		}
@@ -121,18 +137,19 @@ func (t *Trace) CalcRTT(conn net.Conn) (time.Duration, error) {
 // sendTracePkts sends a burst of trace packets to our target.  Once a packet
 // was sent, it's written to the given channel.
 func (t *Trace) sendTracePkts(
-	conn net.Conn,
 	sm *state.Machine,
+	fiveTuple *netx.FiveTuple,
+	seq *netx.SequenceNumbers,
 	wg *sync.WaitGroup,
 ) {
 	defer wg.Done()
 
-	dstAddr, err := netx.ExtractRemoteIP(conn)
-	if err != nil {
-		l.Printf("Error extracting remote IP address from connection: %v", err)
-		return
-	}
-	pktPayload, err := netx.CreatePkt(conn)
+	// dstAddr, err := netx.ExtractRemoteIP(conn)
+	// if err != nil {
+	// 	l.Printf("Error extracting remote IP address from connection: %v", err)
+	// 	return
+	// }
+	pktPayload, err := netx.CreatePkt(fiveTuple, seq)
 	if err != nil {
 		l.Printf("Error creating trace packet payload: %v", err)
 		return
@@ -146,7 +163,7 @@ func (t *Trace) sendTracePkts(
 	for ttl := t.cfg.TTLStart; ttl <= t.cfg.TTLEnd; ttl++ {
 		// Parallelize the sending of trace packets.
 		go func(ttl int) {
-			hdr := netx.NewIpv4Header(ttl, 0, dstAddr, len(pktPayload))
+			hdr := netx.NewIpv4Header(ttl, 0, fiveTuple.DstIP, len(pktPayload))
 			// Send n probe packets for redundancy, in case some get lost.
 			// Each probe packet shares a TTL but has a unique ID.
 			for n := 0; n < t.cfg.NumProbes; n++ {
@@ -193,7 +210,11 @@ func (t *Trace) listen(
 			chans[r] = struct{}{}
 		case r := <-unregister:
 			delete(chans, r)
+		// case c := <-connCh:
+		// Find sequence numbers for the five-tuple of the connection.
 		case pkt := <-pktStream:
+			// We are interested in two types of packets. First, the TCP packets
+			// among which we seek to blend in.
 			respPkt, err := t.parseIcmpPkt(pkt)
 			if err != nil {
 				l.Printf("Error parsing ICMP packet: %v", err)

@@ -3,6 +3,7 @@ package netx
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"strconv"
 	"time"
@@ -27,38 +28,38 @@ var (
 // payload.  The function assembles a TCP segment that resembles the given
 // net.Conn and has a small dummy payload.  The returned byte slice is ready to
 // be written to the wire when combined with an IP header.
-func CreatePkt(conn net.Conn) ([]byte, error) {
+func CreatePkt(t *FiveTuple, seq *SequenceNumbers) ([]byte, error) {
 	// Extract hosts and ports from our net.Conn object.
-	srcIP, strSrcPort, err := net.SplitHostPort(conn.LocalAddr().String())
-	if err != nil {
-		return nil, err
-	}
-	dstIP, strDstPort, err := net.SplitHostPort(conn.RemoteAddr().String())
-	if err != nil {
-		return nil, err
-	}
+	// srcIP, strSrcPort, err := net.SplitHostPort(conn.LocalAddr().String())
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// dstIP, strDstPort, err := net.SplitHostPort(conn.RemoteAddr().String())
+	// if err != nil {
+	// 	return nil, err
+	// }
 
-	// Convert ports from string to int.
-	srcPort, err := strconv.ParseUint(strSrcPort, 10, 16)
-	if err != nil {
-		return nil, err
-	}
-	dstPort, err := strconv.ParseUint(strDstPort, 10, 16)
-	if err != nil {
-		return nil, err
-	}
+	// // Convert ports from string to int.
+	// srcPort, err := strconv.ParseUint(strSrcPort, 10, 16)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// dstPort, err := strconv.ParseUint(strDstPort, 10, 16)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
 	// Compose the pseudo header that's necessary for computing the TCP header
 	// checksum.
 	ipLayer := &layers.IPv4{
 		Protocol: layers.IPProtocolTCP,
-		SrcIP:    net.ParseIP(srcIP),
-		DstIP:    net.ParseIP(dstIP),
+		SrcIP:    t.SrcIP,
+		DstIP:    t.DstIP,
 		Length:   uint16(20 + 20 + len(tcpPayload)),
 	}
 	tcpLayer := &layers.TCP{
-		SrcPort: layers.TCPPort(srcPort),
-		DstPort: layers.TCPPort(dstPort),
+		SrcPort: layers.TCPPort(t.SrcPort),
+		DstPort: layers.TCPPort(t.DstPort),
 		Window:  500,
 		PSH:     true,
 		ACK:     true,
@@ -125,6 +126,49 @@ func ExtractRemoteIP(c net.Conn) (net.IP, error) {
 		return nil, err
 	}
 	return net.ParseIP(host), nil
+}
+
+type SequenceNumbers struct {
+	Seq uint32
+	Ack uint32
+}
+
+type FiveTuple struct {
+	SrcIP   net.IP
+	SrcPort uint16
+	DstIP   net.IP
+	DstPort uint16
+}
+
+var errNoFiveTuple = errors.New("failed to extract five-tuple")
+
+func ExtractFiveTuple(c net.Conn) (*FiveTuple, error) {
+	// Extract hosts and ports from our net.Conn object.
+	srcIP, strSrcPort, err := net.SplitHostPort(c.LocalAddr().String())
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errNoFiveTuple, err)
+	}
+	dstIP, strDstPort, err := net.SplitHostPort(c.RemoteAddr().String())
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errNoFiveTuple, err)
+	}
+
+	// Convert ports from string to int.
+	srcPort, err := strconv.ParseUint(strSrcPort, 10, 16)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errNoFiveTuple, err)
+	}
+	dstPort, err := strconv.ParseUint(strDstPort, 10, 16)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errNoFiveTuple, err)
+	}
+
+	return &FiveTuple{
+		SrcIP:   net.ParseIP(srcIP),
+		SrcPort: uint16(srcPort),
+		DstIP:   net.ParseIP(dstIP),
+		DstPort: uint16(dstPort),
+	}, nil
 }
 
 // ExtractIPID parses the given IP header, extracts its IP ID, and returns it.
