@@ -79,13 +79,12 @@ func (z *ZeroTrace) Close() {
 func (z *ZeroTrace) CalcRTT(conn net.Conn) (time.Duration, error) {
 	var (
 		state     *trState
-		wg        sync.WaitGroup
 		ticker    = time.NewTicker(250 * time.Millisecond)
 		respChan  = make(chan *respPkt, 1)
 		traceChan = make(chan *tracePkt, 1)
 	)
+	defer ticker.Stop()
 	defer close(respChan)
-	defer close(traceChan)
 
 	remoteIP, err := extractRemoteIP(conn)
 	if err != nil {
@@ -98,18 +97,22 @@ func (z *ZeroTrace) CalcRTT(conn net.Conn) (time.Duration, error) {
 	defer func() { z.outgoing <- respChan }()
 
 	// Spawn goroutine that sends trace packets.
-	wg.Add(1)
-	go z.sendTracePkts(traceChan, conn, &wg)
+	go z.sendTracePkts(traceChan, conn)
 
 	for {
 		select {
-		case tracePkt := <-traceChan:
+		case tracePkt, ok := <-traceChan:
+			if !ok {
+				traceChan = nil
+				continue
+			}
 			state.addTracePkt(tracePkt) // Sent new trace packet.
 		case respPkt := <-respChan:
 			state.addRespPkt(respPkt) // Received new response packet.
 		case <-ticker.C:
-			wg.Wait()
-			if state.isFinished() {
+			// The sender closes traceChan after all probe goroutines have
+			// finished.  Wait until then so no probe can outlive this call.
+			if traceChan == nil && state.isFinished() {
 				return state.calcRTT()
 			}
 		}
@@ -117,13 +120,10 @@ func (z *ZeroTrace) CalcRTT(conn net.Conn) (time.Duration, error) {
 }
 
 // sendTracePkts sends a burst of trace packets to our target.  Once a packet
-// was sent, it's written to the given channel.
-func (z *ZeroTrace) sendTracePkts(
-	c chan *tracePkt,
-	conn net.Conn,
-	wg *sync.WaitGroup,
-) {
-	defer wg.Done()
+// was sent, it's written to the given channel.  The channel is closed after
+// all probe goroutines have exited.
+func (z *ZeroTrace) sendTracePkts(c chan *tracePkt, conn net.Conn) {
+	defer close(c)
 
 	dstAddr, err := extractRemoteIP(conn)
 	if err != nil {
@@ -141,9 +141,14 @@ func (z *ZeroTrace) sendTracePkts(
 		diff := time.Now().UTC().Sub(start)
 		l.Printf("Sent trace packets in: %v", diff)
 	}()
+
+	var wg sync.WaitGroup
 	for ttl := z.cfg.TTLStart; ttl <= z.cfg.TTLEnd; ttl++ {
 		// Parallelize the sending of trace packets.
+		wg.Add(1)
 		go func(ttl int) {
+			defer wg.Done()
+
 			hdr := newIpv4Header(ttl, 0, dstAddr, len(pktPayload))
 			// Send n probe packets for redundancy, in case some get lost.
 			// Each probe packet shares a TTL but has a unique ID.
@@ -166,6 +171,7 @@ func (z *ZeroTrace) sendTracePkts(
 			}
 		}(ttl)
 	}
+	wg.Wait()
 }
 
 // listen opens a pcap handle and begins listening for incoming ICMP packets.
