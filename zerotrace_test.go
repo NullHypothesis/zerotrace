@@ -1,6 +1,7 @@
 package zerotrace
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"testing"
@@ -58,4 +59,29 @@ func TestListen(t *testing.T) {
 	respPkt := <-receiver
 	fmt.Println(respPkt)
 	assertEqual(t, respPkt.ipID, ipid)
+}
+
+func TestParseIcmpPktRejectsMissingLayers(t *testing.T) {
+	z := NewZeroTrace(NewDefaultConfig())
+	packets := []gopacket.Packet{
+		gopacket.NewPacket(
+			[]byte("not an IPv4 packet"),
+			gopacket.LayerTypePayload,
+			gopacket.DecodeOptions{},
+		),
+		gopacket.NewPacket(
+			[]byte{
+				0x45, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x40, 0x06,
+				0x00, 0x00, 0x7f, 0x00, 0x00, 0x01, 0x7f, 0x00, 0x00, 0x01,
+			},
+			layers.LayerTypeIPv4,
+			gopacket.DecodeOptions{},
+		),
+	}
+
+	for _, packet := range packets {
+		if _, err := z.parseIcmpPkt(packet); !errors.Is(err, errNoIcmp) {
+			t.Fatalf("Expected %v but got %v.", errNoIcmp, err)
+		}
+	}
 }

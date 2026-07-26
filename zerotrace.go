@@ -220,12 +220,14 @@ func (z *ZeroTrace) parseIcmpPkt(packet gopacket.Packet) (*respPkt, error) {
 	if packet == nil {
 		return nil, errNoIcmp
 	}
-	ipv4Layer := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
-	icmpLayer := packet.Layer(layers.LayerTypeICMPv4)
-	if ipv4Layer == nil || icmpLayer == nil {
+	ipv4Layer, ok := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+	if !ok || ipv4Layer == nil {
 		return nil, errNoIcmp
 	}
-	icmpPkt, _ := icmpLayer.(*layers.ICMPv4)
+	icmpPkt, ok := packet.Layer(layers.LayerTypeICMPv4).(*layers.ICMPv4)
+	if !ok || icmpPkt == nil {
+		return nil, errNoIcmp
+	}
 
 	ipID, err := extractIPID(icmpPkt.LayerPayload())
 	if err != nil {
